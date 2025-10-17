@@ -3,31 +3,18 @@ from math import comb
 from itertools import combinations
 import os
 
+
 class Pauli:
-    I = np.array([
-        [1, 0],
-        [0, 1]
-    ], dtype=complex)
+    I = np.array([[1, 0], [0, 1]], dtype=complex)
 
-    X = np.array([
-        [0, 1],
-        [1, 0]
-    ], dtype=complex)
+    X = np.array([[0, 1], [1, 0]], dtype=complex)
 
-    Y = np.array([
-        [0, -1j],
-        [1j, 0]
-    ])
+    Y = np.array([[0, -1j], [1j, 0]])
 
-    Z = np.array([
-        [1, 0],
-        [0, -1]
-    ], dtype=complex)
+    Z = np.array([[1, 0], [0, -1]], dtype=complex)
 
-def get_ps_basis(
-    s: int | tuple[int],
-    N: int
-) -> np.ndarray:
+
+def get_ps_basis(s: int | tuple[int], N: int) -> np.ndarray:
     """
     Get the particle-number (and possibly spin) sector basis for a system of N sites.
     If the basis file does not exist, it will be calculated and saved.
@@ -100,25 +87,23 @@ def get_ps_basis(
             np.savetxt(basis_file, basis, fmt="%d")
             return basis
 
-def gen_from_pauli_string(
-    N: int,
-    pauli_string: str,
-    particle_selection: tuple[int] | int = None
-) -> np.ndarray:
 
+def gen_from_pauli_string(
+    N: int, pauli_string: str, particle_selection: tuple[int] | int = None
+) -> np.ndarray:
     next_location = 0
     mat = np.eye(1)
     for i in np.arange(0, len(pauli_string), 2):
         for j in range(int(pauli_string[i + 1]) - next_location):
             mat = np.kron(mat, Pauli.I)
         next_location = int(pauli_string[i + 1]) + 1
-        if(pauli_string[i] == 'I'):
+        if pauli_string[i] == "I":
             mat = np.kron(mat, Pauli.I)
-        elif(pauli_string[i] == 'X'):
+        elif pauli_string[i] == "X":
             mat = np.kron(mat, Pauli.X)
-        elif(pauli_string[i] == 'Y'):
+        elif pauli_string[i] == "Y":
             mat = np.kron(mat, Pauli.Y)
-        elif(pauli_string[i] == 'Z'):
+        elif pauli_string[i] == "Z":
             mat = np.kron(mat, Pauli.Z)
 
     for i in np.arange(N - next_location):
