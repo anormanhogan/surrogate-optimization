@@ -88,7 +88,7 @@ def get_ps_basis(s: int | tuple[int], N: int) -> np.ndarray:
             return basis
 
 
-def gen_from_pauli_string(
+def gen_from_pauli_string_old(
     N: int, pauli_string: str, particle_selection: tuple[int] | int = None
 ) -> np.ndarray:
     next_location = 0
@@ -114,3 +114,57 @@ def gen_from_pauli_string(
         mat = mat[:, basis][basis]
 
     return mat
+
+
+def gen_from_pauli_string(
+    N: int, pauli_string: str, particle_selection: tuple[int] | int = None
+) -> np.ndarray:
+    pauli_map = {
+        "I": Pauli.I,
+        "X": Pauli.X,
+        "Y": Pauli.Y,
+        "Z": Pauli.Z,
+    }
+    pauli_list = pauli_string.split(" ")
+    if pauli_list == [""]:
+        mat = np.eye(2**N)
+        if particle_selection is not None:
+            basis = get_ps_basis(particle_selection, N)
+            mat = mat[:, basis][basis]
+        return mat
+
+    else:
+        next_location = 0
+        mat = np.eye(1)
+        for i in range(0, len(pauli_list)):
+            index = int(pauli_list[i][1:])
+            # Add identity matrices for skipped qubits
+            for _ in range(index - next_location):
+                mat = np.kron(mat, Pauli.I)
+            next_location = index + 1
+            # Add the specified Pauli matrix
+            mat = np.kron(mat, pauli_map[pauli_list[i][0]])
+
+        # Add identity matrices for remaining qubits
+        for _ in range(N - next_location):
+            mat = np.kron(mat, Pauli.I)
+
+        if particle_selection is not None:
+            basis = get_ps_basis(particle_selection, N)
+            mat = mat[:, basis][basis]
+
+        return mat
+
+
+def of_operator_to_pauli_and_coeff(N, of_operator) -> list[tuple[str, complex]]:
+    pauli_list = []
+    for term in of_operator.terms:
+        pauli_string = ""
+        for qubit_index in range(N):
+            if qubit_index in [idx for idx, _ in term]:
+                pauli_type = [ptype for idx, ptype in term if idx == qubit_index][0]
+                pauli_string += f"{pauli_type}{qubit_index} "
+        pauli_string = pauli_string.strip()  # Remove trailing space
+        coeff = of_operator.terms[term]
+        pauli_list.append((pauli_string, coeff))
+    return pauli_list
