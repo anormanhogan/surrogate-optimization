@@ -46,6 +46,7 @@ class SurrogateModel:
         pauli_strings: list[str],
         training_grid: list[list[complex]],
         particle_selection: tuple[int, int] | int = None,
+        basis_ordering: str = "uudd",
     ):
         self.N = N
         self.pauli_strings = pauli_strings
@@ -57,13 +58,20 @@ class SurrogateModel:
         self.overlap = None
         self.reduced_terms = None
         self.particle_selection = particle_selection
+        self.basis_ordering = basis_ordering
 
     def build_terms(self):
         self.H_terms = []
         for pauli_string in self.pauli_strings:
             self.H_terms.append(
-                gen_from_pauli_string(self.N, pauli_string, self.particle_selection),
+                gen_from_pauli_string(
+                    self.N,
+                    pauli_string,
+                    self.particle_selection,
+                    ordering=self.basis_ordering,
+                ),
             )
+            print("Built term:", pauli_string, self.H_terms[-1].shape)
 
         self.H2_terms = []
         for h_i in self.H_terms:
@@ -97,6 +105,8 @@ class SurrogateModel:
         residue_threshold: float = 1e-6,
         init_vec: np.ndarray = None,
         solution_grid: np.ndarray = None,
+        svd_tolerance: float = 1e-8,
+        degeneracy_truncation: int = 5,
     ):
         # build terms if they are not already built
         if (
@@ -112,9 +122,6 @@ class SurrogateModel:
         # list of remaining indices into the training grid
         not_chosen = list(range(len(self.training_grid)))
 
-        # list of ill-conditioned choices
-        dont_choose = []
-
         # initial vector is not provided, so we choose from the training grid
         if init_vec == None:
             H_full = self._build_H_full(0)
@@ -126,35 +133,44 @@ class SurrogateModel:
         basis_list = [init_vec]
         basis = np.array(basis_list).T
 
-        if type(solution_grid) != type(None):
-            answer_grid = np.zeros(solution_grid.shape, dtype=complex)
-            for y in range(solution_grid.shape[0]):
-                for x in range(solution_grid.shape[1]):
-                    H_full = self._build_H_full(y * solution_grid.shape[1] + x)
+        if type(solution_grid[0]) != type(None):
+            answer_grid = np.zeros(solution_grid[0].shape, dtype=complex)
+            for y in range(solution_grid[0].shape[0]):
+                for x in range(solution_grid[0].shape[1]):
+                    H_full = self._build_H_full(y * solution_grid[0].shape[1] + x)
                     Hr = basis.conj().T @ H_full @ basis
                     overlap = basis.conj().T @ basis
                     evals, evecs = sp.linalg.eigh(Hr, overlap)
                     answer_grid[y, x] = evals[0]
 
             plt.imshow(
-                np.abs((answer_grid - solution_grid).real) + 1e-20,
-                norm=mcolors.LogNorm(vmin=1e-20, vmax=1),
+                np.abs((answer_grid - solution_grid[0]).real) + 1e-14,
+                norm=mcolors.LogNorm(vmin=1e-14, vmax=1),
             )
             plt.colorbar(
-                norm=mcolors.LogNorm(vmin=1e-20, vmax=1),
-                label="Absolute Error",  # , ticks=[1e-20, 1e-len(mu), 1e0]
+                norm=mcolors.LogNorm(vmin=1e-14, vmax=1),
+                label="Absolute Error",  # , ticks=[1e-14, 1e-len(mu), 1e0]
             )
             plt.scatter(
-                chosen[0] % solution_grid.shape[1],  # type: ignore
-                chosen[0] // solution_grid.shape[1],  # type: ignore
+                chosen[0] % solution_grid[0].shape[1],  # type: ignore
+                chosen[0] // solution_grid[0].shape[1],  # type: ignore
                 marker="x",
                 color="red",
-                s=solution_grid.shape[0] ** 2,
+                s=20,
                 label="First choice",
             )
-            plt.xlabel("p2")
-            plt.ylabel("p1")
+            plt.xlabel(r"$\mu_2$")
+            plt.ylabel(r"$\mu_1$")
             plt.title("It 1, Basis Size 1")
+            plt.xticks(
+                range(0, solution_grid[0].shape[1], 2),
+                labels=np.round(solution_grid[1], 2)[::2],
+            )
+            plt.yticks(
+                range(0, solution_grid[0].shape[0], 2),
+                labels=np.round(solution_grid[1], 2)[::2],
+                rotation=45,
+            )
             plt.show()
 
         # iteration
@@ -162,10 +178,10 @@ class SurrogateModel:
         for i in range(num_iterations):
             print("Iteration", i + 1)
             overlap = (basis.conj().T @ basis).real
-            plt.imshow(overlap.real, label="Current Basis Vectors")
-            plt.colorbar()
-            plt.title(f"It {i + 1} Overlap")
-            plt.show()
+            # plt.imshow(overlap.real, label="Current Basis Vectors")
+            # plt.colorbar()
+            # plt.title(f"It {i + 1} Overlap")
+            # plt.show()
             max_res2 = -np.inf
             next_choice = None
             chosen_H_full = None
@@ -176,94 +192,56 @@ class SurrogateModel:
                 # construct Hr and H2r
                 # technically H_full and H2_full only need to be constructed
                 # once, however, due to possible memory limitations based on
-                # the trianing grid size and full Hilbert space size, these are
+                # the training grid size and full Hilbert space size, these are
                 # constructed on demand
+
                 H_full = self._build_H_full(j)
                 H2_full = H_full @ H_full  # self._build_H2_full(j)
                 full_evals, full_evecs = np.linalg.eigh(H_full)
+                print()
+                print("Full gs energy:", full_evals[0])
+                print("Full gs energy squared:", full_evals[0] ** 2)
+                print(
+                    "Full gs on H2_full:",
+                    (full_evecs[:, 0].conj().T @ H2_full @ full_evecs[:, 0]).real,
+                )
+                print("Full eigenvalues (first 5):", full_evals[:5])
 
                 Hr = basis.conj().T @ H_full @ basis
                 H2r = basis.conj().T @ H2_full @ basis
                 evals, evecs = sp.linalg.eigh(Hr, overlap)
-                print("gs of Hr:", evals[0])
-                print("gs of H_full", full_evals[0])
+                print("Reduced gs energy:", evals[0])
+                print("Reduced gs energy squared:", evals[0] ** 2)
                 print(
-                    "gs of H2_full",
-                    full_evecs[:, 0].conj().T @ H2_full @ full_evecs[:, 0],
+                    "Reduced gs on H2r:",
+                    (evecs[:, 0].conj().T @ H2r @ evecs[:, 0]).real,
                 )
-                # print("gs of H2_full squared:", np.linalg.eigh(H2_full)[0][0] ** 2)
-                # print("gs of H_full squared:", np.linalg.eigh(H_full)[0][0] ** 2)
-                # print("gs of Hr squared:", np.linalg.eigh(Hr)[0][0] ** 2)
-                # print("gs of H2r squared:", np.linalg.eigh(H2r)[0][0] ** 2)
+
+                # plt.imshow(evecs.real, label="Reduced Basis", aspect="auto")
+                # plt.colorbar()
+                # plt.title(f"It {i + 1}, Parameter Index {j} Eigenvectors")
+                # plt.show()
 
                 # plt.imshow(
-                #     np.abs(H2_full - H_full @ H_full) + 1e-20,
-                #     norm=mcolors.LogNorm(vmin=1e-20, vmax=1),
+                #     full_evecs[:, :5].real,
+                #     label="Full Basis (first 5 vecs)",
+                #     aspect="auto",
                 # )
-                # plt.colorbar(
-                #     norm=mcolors.LogNorm(
-                #         vmin=1e-20, vmax=1
-                #     )  # , ticks=[1e-20, 1e-10, 1e0]
-                # )
-                # plt.title("H2 - H^2 Full Matrix Difference")
+                # plt.colorbar()
+                # plt.title(f"It {i + 1}, Parameter Index {j} Full Eigenvectors")
                 # plt.show()
 
                 # find degeneracy of the ground state
-                eps = 1e-10  # for comparing floating points of GSE
                 degeneracy = 0
+                eps = 1e-10
                 for e in evals:
                     if abs(e - evals[0]) < eps:
                         degeneracy += 1
                     else:
                         break
+                    if degeneracy >= degeneracy_truncation:
+                        break
 
-                # plt.imshow(
-                #     evecs[:, 0:degeneracy].real,
-                #     label="Ground State Degeneracy Vectors for parameter index {}".format(
-                #         j
-                #     ),
-                #     vmin=-1,
-                #     vmax=1,
-                #     aspect="auto",
-                # )
-                # plt.colorbar()
-                # plt.title(
-                #     "Ground State Degeneracy Vectors for parameter index {}".format(j)
-                # )
-                # for n in range(evecs[:, 0:degeneracy].shape[0]):
-                #     for m in range(evecs[:, 0:degeneracy].shape[1]):
-                #         # print(n, m)
-                #         plt.text(
-                #             m,
-                #             n,
-                #             f"{evecs[:, 0:degeneracy][n,m].real:.2e}",
-                #             ha="center",
-                #             va="center",
-                #             color="r",
-                #         )
-                # # print(evecs[:, 0:degeneracy].shape)
-
-                # plt.show()
-                # inner_res = (H2r - evals[0] * evals[0] * overlap).real
-                # plt.imshow(
-                #     inner_res,
-                #     label="H2r - E0^2 S",
-                #     vmin=0,
-                #     vmax=1,
-                # )
-                # plt.colorbar()
-                # plt.title("H2r - E0^2 S for parameter index {}".format(j))
-                # for n in range(inner_res.shape[0]):
-                #     for m in range(inner_res.shape[1]):
-                #         plt.text(
-                #             n,
-                #             m,
-                #             f"{inner_res[n,m]:.2e}",
-                #             ha="center",
-                #             va="center",
-                #             color="r",
-                #         )
-                # plt.show()
                 # calculate residue
                 res2 = 0
                 for k in range(degeneracy):
@@ -272,16 +250,7 @@ class SurrogateModel:
                         @ (H2r - ((evals[k] * evals[k]) * overlap))
                         @ evecs[:, k]
                     )
-                    # print(evals[k] ** 2)
-                    # print(np.linalg.eigh(H2r)[0][0] ** 2)
-                    print("Residue contribution from state", k, ":", res2.real)
-                    print(
-                        "evals squared",
-                        evecs[:, k].conj().T @ (evals[k] ** 2 * overlap) @ evecs[:, k],
-                    )
-                    print("H2r exp", evecs[:, k].conj().T @ H2r @ evecs[:, k])
-                    print("exp overlap", evecs[:, k].conj().T @ overlap @ evecs[:, k])
-
+                print("Total Residue for parameter index", j, ":", res2.real)
                 residues.append(res2.real)
                 if res2 > max_res2:
                     max_res2 = res2
@@ -301,7 +270,6 @@ class SurrogateModel:
                     [next_choice],
                     [max_res2.real],
                     "rx",
-                    markersize=12,
                     label="Next Choice",
                 )
                 plt.xlabel("Training Grid Index")
@@ -309,89 +277,112 @@ class SurrogateModel:
                 plt.title(f"Termination Residues")
                 plt.show()
 
-                if type(solution_grid) != type(None):
-                    answer_grid = np.zeros(solution_grid.shape, dtype=complex)  # type: ignore
+                if type(solution_grid[0]) != type(None):
+                    answer_grid = np.zeros(solution_grid[0].shape, dtype=complex)  # type: ignore
                     count = 0
-                    for y in range(solution_grid.shape[0]):  # type: ignore
-                        for x in range(solution_grid.shape[1]):  # type: ignore
-                            H_full = self._build_H_full(y * solution_grid.shape[1] + x)
+                    for y in range(0, solution_grid[0].shape[0]):  # type: ignore
+                        for x in range(0, solution_grid[0].shape[1]):  # type: ignore
+                            H_full = self._build_H_full(
+                                y * solution_grid[0].shape[1] + x
+                            )
                             Hr = basis.conj().T @ H_full @ basis
                             overlap = basis.conj().T @ basis
                             evals, evecs = sp.linalg.eigh(Hr, overlap)
                             answer_grid[y, x] = evals[0]
 
-                            if y * solution_grid.shape[1] + x in not_chosen:
-                                print(
-                                    "Estimation:",
-                                    answer_grid[y, x],
-                                    "Actual:",
-                                    solution_grid[y, x],
-                                    "Residue:",
-                                    residues[count],
-                                )
+                            if y * solution_grid[0].shape[1] + x in not_chosen:
+                                # print(
+                                #     "Estimation:",
+                                #     answer_grid[y, x],
+                                #     "Actual:",
+                                #     solution_grid[0][y, x],
+                                #     "Residue:",
+                                #     residues[count],
+                                # )
                                 count += 1
 
                     plt.imshow(
-                        np.abs((answer_grid - solution_grid).real) + 1e-20,
-                        norm=mcolors.LogNorm(vmin=1e-20, vmax=1),
+                        np.abs((answer_grid - solution_grid[0]).real) + 1e-14,
+                        norm=mcolors.LogNorm(vmin=1e-14, vmax=1),
                     )
                     plt.colorbar(
                         norm=mcolors.LogNorm(
-                            vmin=1e-20, vmax=1
-                        )  # , ticks=[1e-20, 1e-10, 1e0]
+                            vmin=1e-14, vmax=1
+                        )  # , ticks=[1e-14, 1e-10, 1e0]
                     )
                     plt.scatter(
-                        np.array(chosen) % solution_grid.shape[1],  # type: ignore
-                        np.array(chosen) // solution_grid.shape[1],  # type: ignore
+                        np.array(chosen) % solution_grid[0].shape[1],  # type: ignore
+                        np.array(chosen) // solution_grid[0].shape[1],  # type: ignore
                         marker="o",
                         color="orange",
-                        s=solution_grid.shape[0] ** 2,
+                        s=20,
                         label="Chosen Points",
                     )
-                    plt.xlabel("p2")
-                    plt.ylabel("p1")
-                    plt.title(
-                        f"Termination errors, Basis Size {basis.shape[1]}, U={4*self.training_grid[i][7].real:.2f}"
+                    plt.xlabel(r"$\mu_2$")
+                    plt.ylabel(r"$\mu_1$")
+                    plt.title(f"Termination errors, Basis Size {basis.shape[1]}")
+                    plt.xticks(
+                        range(0, solution_grid[0].shape[1], 2),
+                        labels=np.round(solution_grid[1], 2)[::2],
+                    )
+                    plt.yticks(
+                        range(0, solution_grid[0].shape[0], 2),
+                        labels=np.round(solution_grid[1], 2)[::2],
+                        rotation=45,
                     )
                     plt.show()
 
                 break
 
             plt.plot(not_chosen, np.array(residues).real, "o-")
-            plt.plot(
-                [next_choice], [max_res2.real], "rx", markersize=12, label="Next Choice"
-            )
+            plt.plot([next_choice], [max_res2.real], "rx", label="Next Choice")
             plt.xlabel("Training Grid Index")
             plt.ylabel("Residue")
             plt.title(f"It {i + 1} Residues")
             plt.show()
 
+            # plt.plot(basis.real, label="Current Basis Vectors")
+            # plt.title(f"It {i + 1} Basis")
+            # plt.legend()
+            # plt.show()
+
             evals, evecs = np.linalg.eigh(chosen_H_full)
+            print("Full system size:", evals.shape[0])
+            # print("Full Eigenvalues (degen of Hr + 10):", evals[: degeneracy + 10])
             # find degeneracy of the ground state
-            eps = 1e-10  # for comparing floating points of GSE
+            # for comparing floating points of GSE
             degeneracy = 0
             for e in evals:
                 if abs(e - evals[0]) < eps:
                     degeneracy += 1
                 else:
                     break
+                if degeneracy >= degeneracy_truncation:
+                    break
 
+            print("Degeneracy of chosen H_full ground state:", degeneracy)
             basis_addition = evecs[:, 0:degeneracy]
-            plt.plot(basis_addition, label="Basis Addition Vectors")
-            plt.plot(basis, label="Current Basis Vectors")
-            plt.title(f"It {i + 1} Basis Addition")
-            plt.legend()
-            plt.show()
+            # plt.plot(basis_addition, label="Basis Addition Vectors")
+            # plt.plot(basis, label="Current Basis Vectors")
+            # plt.title(f"It {i + 1} Basis Addition")
+            # plt.legend()
+            # plt.show()
 
             # compress the basis
             projection = basis_addition - basis @ sp.linalg.solve(
                 overlap, basis.conj().T @ basis_addition
             )
 
+            # plt.plot(projection.real, label="Projection Vectors")
+            # plt.title(f"It {i + 1} Projection")
+            # plt.legend()
+            # plt.show()
+
             U, sigmas, Vdagger = np.linalg.svd(projection)
             compress_add = 0
             for s in sigmas:
-                if s > eps:
+                print("Sigma:", s)
+                if s > svd_tolerance:
                     compress_add += 1
                 else:
                     break
@@ -425,13 +416,8 @@ class SurrogateModel:
                     evals, evecs = sp.linalg.eigh(Hr, overlap)
 
                     # find degeneracy of the ground state
-                    eps = 1e-10  # for comparing floating points of GSE
-                    degeneracy = 0
-                    for e in evals:
-                        if abs(e - evals[0]) < eps:
-                            degeneracy += 1
-                        else:
-                            break
+                    svd_tolerance = 1e-10  # for comparing floating points of GSE
+                    degeneracy = 1
 
                     # calculate residue
                     res2 = 0
@@ -458,7 +444,6 @@ class SurrogateModel:
                         [next_choice],
                         [max_res2.real],
                         "rx",
-                        markersize=12,
                         label="Next Choice",
                     )
                     plt.xlabel("Training Grid Index")
@@ -466,50 +451,57 @@ class SurrogateModel:
                     plt.title(f"Termination Residues")
                     plt.show()
 
-                    if type(solution_grid) != type(None):
-                        answer_grid = np.zeros(solution_grid.shape, dtype=complex)  # type: ignore
+                    if type(solution_grid[0]) != type(None):
+                        answer_grid = np.zeros(solution_grid[0].shape, dtype=complex)  # type: ignore
                         count = 0
-                        for y in range(solution_grid.shape[0]):  # type: ignore
-                            for x in range(solution_grid.shape[1]):  # type: ignore
+                        for y in range(0, solution_grid[0].shape[0]):  # type: ignore
+                            for x in range(0, solution_grid[0].shape[1]):  # type: ignore
                                 H_full = self._build_H_full(
-                                    y * solution_grid.shape[1] + x
+                                    y * solution_grid[0].shape[1] + x
                                 )
                                 Hr = basis.conj().T @ H_full @ basis
                                 overlap = basis.conj().T @ basis
                                 evals, evecs = sp.linalg.eigh(Hr, overlap)
                                 answer_grid[y, x] = evals[0]
-                                if y * solution_grid.shape[1] + x in not_chosen:
-                                    print(
-                                        "Estimation:",
-                                        answer_grid[y, x],
-                                        "Actual:",
-                                        solution_grid[y, x],
-                                        "Residue:",
-                                        residues[count],
-                                    )
+                                if y * solution_grid[0].shape[1] + x in not_chosen:
+                                    # print(
+                                    #     "Estimation:",
+                                    #     answer_grid[y, x],
+                                    #     "Actual:",
+                                    #     solution_grid[0][y, x],
+                                    #     "Residue:",
+                                    #     residues[count],
+                                    # )
                                     count += 1
 
                         plt.imshow(
-                            np.abs((answer_grid - solution_grid).real) + 1e-20,
-                            norm=mcolors.LogNorm(vmin=1e-20, vmax=1),
+                            np.abs((answer_grid - solution_grid[0]).real) + 1e-14,
+                            norm=mcolors.LogNorm(vmin=1e-14, vmax=1),
                         )
                         plt.colorbar(
                             norm=mcolors.LogNorm(
-                                vmin=1e-20, vmax=1
-                            )  # , ticks=[1e-20, 1e-10, 1e0]
+                                vmin=1e-14, vmax=1
+                            )  # , ticks=[1e-14, 1e-10, 1e0]
                         )
                         plt.scatter(
-                            np.array(chosen) % solution_grid.shape[1],  # type: ignore
-                            np.array(chosen) // solution_grid.shape[1],  # type: ignore
+                            np.array(chosen) % solution_grid[0].shape[1],  # type: ignore
+                            np.array(chosen) // solution_grid[0].shape[1],  # type: ignore
                             marker="o",
                             color="orange",
-                            s=solution_grid.shape[0] ** 2,
+                            s=20,
                             label="Chosen Points",
                         )
-                        plt.xlabel("p2")
-                        plt.ylabel("p1")
-                        plt.title(
-                            f"Termination errors, Basis Size {basis.shape[1]}, U={4*self.training_grid[i][7].real:.2f}"
+                        plt.xlabel(r"$\mu_2$")
+                        plt.ylabel(r"$\mu_1$")
+                        plt.title(f"Termination errors, Basis Size {basis.shape[1]}")
+                        plt.xticks(
+                            range(0, solution_grid[0].shape[1], 2),
+                            labels=np.round(solution_grid[1], 2)[::2],
+                        )
+                        plt.yticks(
+                            range(0, solution_grid[0].shape[0], 2),
+                            labels=np.round(solution_grid[1], 2)[::2],
+                            rotation=45,
                         )
                         plt.show()
                     break
@@ -519,7 +511,6 @@ class SurrogateModel:
                     [next_choice],
                     [max_res2.real],
                     "rx",
-                    markersize=12,
                     label="Next Choice",
                 )
                 plt.xlabel("Training Grid Index")
@@ -530,56 +521,63 @@ class SurrogateModel:
                 basis = copy.copy(basis_reduced)
 
             print("Looking at solutions with current basis of size", basis.shape[1])
-            if type(solution_grid) != type(None):
-                answer_grid = np.zeros(solution_grid.shape, dtype=complex)  # type: ignore
+            if type(solution_grid[0]) != type(None):
+                answer_grid = np.zeros(solution_grid[0].shape, dtype=complex)  # type: ignore
                 count = 0
-                for y in range(solution_grid.shape[0]):  # type: ignore
-                    for x in range(solution_grid.shape[1]):  # type: ignore
-                        H_full = self._build_H_full(y * solution_grid.shape[1] + x)
+                for y in range(solution_grid[0].shape[0]):  # type: ignore
+                    for x in range(solution_grid[0].shape[1]):  # type: ignore
+                        H_full = self._build_H_full(y * solution_grid[0].shape[1] + x)
                         Hr = basis.conj().T @ H_full @ basis
                         overlap = basis.conj().T @ basis
                         evals, evecs = sp.linalg.eigh(Hr, overlap)
                         answer_grid[y, x] = evals[0]
-                        if y * solution_grid.shape[1] + x in not_chosen:
-                            print(
-                                "Estimation:",
-                                answer_grid[y, x],
-                                "Actual:",
-                                solution_grid[y, x],
-                                "Residue:",
-                                residues[count],
-                            )
+                        if y * solution_grid[0].shape[1] + x in not_chosen:
+                            # print(
+                            #     "Estimation:",
+                            #     answer_grid[y, x],
+                            #     "Actual:",
+                            #     solution_grid[0][y, x],
+                            #     "Residue:",
+                            #     residues[count],
+                            # )
                             count += 1
 
                 plt.imshow(
-                    np.abs((answer_grid - solution_grid).real) + 1e-20,
-                    norm=mcolors.LogNorm(vmin=1e-20, vmax=1),
+                    np.abs((answer_grid - solution_grid[0]).real) + 1e-14,
+                    norm=mcolors.LogNorm(vmin=1e-14, vmax=1),
                 )
                 plt.colorbar(
                     norm=mcolors.LogNorm(
-                        vmin=1e-20, vmax=1
-                    )  # , ticks=[1e-20, 1e-10, 1e0]
+                        vmin=1e-14, vmax=1
+                    )  # , ticks=[1e-14, 1e-10, 1e0]
                 )
                 plt.scatter(
-                    next_choice % solution_grid.shape[1],  # type: ignore
-                    next_choice // solution_grid.shape[1],  # type: ignore
+                    next_choice % solution_grid[0].shape[1],  # type: ignore
+                    next_choice // solution_grid[0].shape[1],  # type: ignore
                     marker="x",
                     color="red",
-                    s=solution_grid.shape[0] ** 2,
+                    s=20,
                     label="Next Choice",
                 )
                 plt.scatter(
-                    np.array(chosen) % solution_grid.shape[1],  # type: ignore
-                    np.array(chosen) // solution_grid.shape[1],  # type: ignore
+                    np.array(chosen) % solution_grid[0].shape[1],  # type: ignore
+                    np.array(chosen) // solution_grid[0].shape[1],  # type: ignore
                     marker="o",
                     color="orange",
-                    s=solution_grid.shape[0] ** 2,
+                    s=20,
                     label="Chosen Points",
                 )
-                plt.xlabel("p2")
-                plt.ylabel("p1")
-                plt.title(
-                    f"It {i + 2}, Basis Size {basis.shape[1]}, U={4*self.training_grid[i][7].real:.2f}"
+                plt.xlabel(r"$\mu_2$")
+                plt.ylabel(r"$\mu_1$")
+                plt.title(f"It {i + 2}, Basis Size {basis.shape[1]}")
+                plt.xticks(
+                    range(0, solution_grid[0].shape[1], 2),
+                    labels=np.round(solution_grid[1], 2)[::2],
+                )
+                plt.yticks(
+                    range(0, solution_grid[0].shape[0], 2),
+                    labels=np.round(solution_grid[1], 2)[::2],
+                    rotation=45,
                 )
                 plt.show()
 
@@ -618,142 +616,267 @@ class SurrogateModel:
 
 if __name__ == "__main__":
 
-    from openfermion import *
-    import openfermion as of
+    ###############################################################
+    res_thresh = 1e-6
+    svd_tol = 1e-5
+    mu = np.linspace(-3.0, 3.0, 10)
+    N = 4
+    ps = None  # Between 0 and (2*N for AIM, fermi_hubbard), N for TFIM/TFXY/Heisenberg
+    ### NOTE: Particle selection *required* for heisenberg
 
-    mu = np.linspace(-5, 5, 10)
-    N = 6
-    ps = 2  # Between 0 and N
+    model_type = "AIM"  # AIM = Single Impurity Anderson Model, fermi_hubbard, TFIM, TFXY, heisenberg
 
-    model_type = "FH"  # SIAM = Single Impurity Anderson Model, FH = Fermi Hubbard
+    if model_type == "TFIM":
+        model_parameters = {
+            "J": 1,
+            "h": 1,
+            "periodic": False,
+        }
+    elif model_type == "TFXY":
+        model_parameters = {
+            "Jx": 1,
+            "Jy": 1,
+            "h": 1,
+            "periodic": False,
+        }
+    elif model_type == "heisenberg":
+        model_parameters = {
+            "Jx": 1,
+            "Jy": 1,
+            "Jz": 1,
+            "h": 1,
+            "periodic": False,
+        }
+    elif model_type == "fermi_hubbard":
+        U = 3.0
+        model_parameters = {
+            "t": -1,
+            "mu": U / 2,
+            "U": U,
+            "periodic": False,
+        }
+    elif model_type == "AIM":
+        U = 3.0
+        NI = 1
+        NB = N - NI
+        model_parameters = {
+            "NI": NI,
+            "NB": NB,
+            "U": U,
+            "ei": [0.0] * NI,
+            "vb": np.array([0.01] * ((NB) % 2) + [1.0] * (NB - (NB) % 2)),
+            "eb": np.array(
+                [0.0] * ((NB) % 2)
+                + [1.0] * ((NB - (NB) % 2) // 2)
+                + [-1.0] * ((NB - (NB) % 2) // 2)
+            ),
+            "mu": U / 2,
+            "periodic": False,
+        }
 
-    for U in [1.0, 5.0, 9.0]:
+    model_paulis = model_to_paulis(N, model_type, model_parameters)
 
-        hubbard = of.fermi_hubbard(
-            1,
-            N,
-            tunneling=1.0,
-            coulomb=1.0,
-            chemical_potential=1.0,
-            periodic=False,
-        )
+    H_paulis = [t[0] for t in model_paulis]
 
-        print(of.jordan_wigner(hubbard))
-        jw_hubbard = of.jordan_wigner(hubbard)
-        ps_and_cs = of_operator_to_pauli_and_coeff(2 * N, jw_hubbard)
-
-        H_paulis = [t[0] for t in ps_and_cs]
-
-        if model_type == "SIAM":
-            locs = []
-            for i in range(0, 2 * N - 1, 2):
-                loc = np.where([f"Z{i} Z{(i+1)}" == term for term in H_paulis])[0][0]
-                locs.append(loc)
-            print("locs", locs)
-            locs = locs[1:]
-            non_locs = [i for i in range(len(H_paulis)) if i not in locs]
-            H_paulis = [H_paulis[i] for i in non_locs]
-
-        training_grid = []
-        for m1 in mu:
-            for m2 in mu:
-                train_h = of.jordan_wigner(
-                    of.fermi_hubbard(
-                        1,
-                        N,
-                        tunneling=m1,
-                        coulomb=U,
-                        chemical_potential=m2,
-                        periodic=False,
-                    )
+    training_grid = []
+    for m1 in mu:
+        for m2 in mu:
+            if model_type == "TFIM":
+                model_parameters["J"] = m1
+                model_parameters["h"] = m2
+            elif model_type == "TFXY":
+                model_parameters["Jx"] = m1
+                model_parameters["Jy"] = m1
+                model_parameters["h"] = m2
+            elif model_type == "heisenberg":
+                model_parameters["Jx"] = m1
+                model_parameters["Jy"] = m1
+                model_parameters["Jz"] = m2
+                model_parameters["h"] = 0.1
+            elif model_type == "fermi_hubbard":
+                model_parameters["t"] = m1
+                model_parameters["mu"] = m2
+                model_parameters["U"] = U
+            elif model_type == "AIM":
+                model_parameters["vb"] = np.array(
+                    [0.01] * ((NB) % 2) + [m1] * (NB - (NB) % 2)
                 )
-                ps_and_cs = of_operator_to_pauli_and_coeff(2 * N, train_h)
-                if model_type == "FH":
-                    training_grid.append([t[1] for t in ps_and_cs])
-                elif model_type == "SIAM":
-                    training_grid.append(
-                        [t[1] for t in [ps_and_cs[k] for k in non_locs]]
-                    )
 
-        print(H_paulis)
-
-        model = SurrogateModel(2 * N, H_paulis, training_grid, particle_selection=ps)
-
-        model.build_terms()
-
-        # calc real solutions
-        solution_grid = np.zeros((len(mu), len(mu)), dtype=complex)
-        for i in range(len(mu)):
-            for j in range(len(mu)):
-                H_full = np.zeros_like(model.H_terms[0], dtype=complex)
-                parameters = training_grid[i * len(mu) + j]
-                for k, h in enumerate(model.H_terms):
-                    H_full += parameters[k] * h
-                evals, evecs = np.linalg.eigh(H_full)
-                solution_grid[i, j] = evals[0]
-
-        chosen, basis = model.optimize(solution_grid=solution_grid)
-        print("Chosen Indices", chosen)
-        print("Basis Size", basis.shape[1])
-        # print(model.optimize(solution_grid=None))
-
-        errors = []
-        all_ps = []
-        for i in range(30):
-            H_full = np.zeros_like(model.H_terms[0], dtype=complex)
-
-            # (J, Bz, u) = (3 * np.random.randn(2)).tolist() + [U]
-            # parameters = [J] * n2b_terms + [Bz] * n1b_terms + [u] * n_int_terms
-
-            test_h = of.jordan_wigner(
-                of.fermi_hubbard(
-                    1,
-                    N,
-                    tunneling=2 * np.random.randn(),
-                    coulomb=U,
-                    chemical_potential=2 * np.random.randn(),
-                    periodic=False,
+                model_parameters["eb"] = np.array(
+                    [0.0] * ((NB) % 2)
+                    + [m2] * ((NB - (NB) % 2) // 2)
+                    + [-m2] * ((NB - (NB) % 2) // 2)
                 )
-            )
-            ps_and_cs = of_operator_to_pauli_and_coeff(2 * N, test_h)
-            if model_type == "FH":
-                parameters = [t[1] for t in ps_and_cs]
-            elif model_type == "SIAM":
-                parameters = [t[1] for t in [ps_and_cs[k] for k in non_locs]]
+            model_paulis = model_to_paulis(N, model_type, model_parameters)
 
-            for i, h in enumerate(model.H_terms):
-                H_full += parameters[i] * h
-
-            evals, evecs = np.linalg.eigh(H_full)
-
-            # print(parameters)
-            print("Real", evals[0])
-            print("Approx", model.solve(parameters))
-            if abs(evals[0]) < 1e-12:
-                errors.append(np.abs(evals[0] - model.solve(parameters)))
+            if model_type == "AIM" or model_type == "fermi_hubbard":
+                id_loc = np.where(np.array([t[0] for t in model_paulis]) == "")[0][0]
+                grid_point1 = [model_paulis[id_loc][1]]
+                grid_point = grid_point1 + [
+                    model_paulis[k][1] for k in range(len(model_paulis)) if k != id_loc
+                ]
+                training_grid.append(grid_point)
             else:
-                errors.append(
-                    np.abs(evals[0] - model.solve(parameters)) / np.abs(evals[0])
-                )
-            print(
-                "Relative Error",
-                errors[-1],
+                training_grid.append([t[1] for t in model_paulis])
+
+    if model_type == "AIM" or model_type == "fermi_hubbard":
+        surrogate_N = 2 * N
+        surrogate_ord = "udud"
+    else:
+        surrogate_N = N
+        surrogate_ord = "uudd"
+    model = SurrogateModel(
+        surrogate_N,
+        H_paulis,
+        training_grid,
+        particle_selection=ps,
+        basis_ordering=surrogate_ord,
+    )
+
+    model.build_terms()
+    print("Number of H terms:", len(model.H_terms))
+
+    # calc real solutions
+    solution_grid = np.zeros((len(mu), len(mu)), dtype=complex)
+    for i in range(len(mu)):
+        for j in range(len(mu)):
+            H_full = np.zeros_like(model.H_terms[0], dtype=complex)
+            parameters = training_grid[i * len(mu) + j]
+            for k, h in enumerate(model.H_terms):
+                H_full += parameters[k] * h
+            evals, evecs = np.linalg.eigh(H_full)
+            solution_grid[i, j] = evals[0]
+
+    chosen, basis = model.optimize(
+        solution_grid=(solution_grid, mu),
+        svd_tolerance=svd_tol,
+        residue_threshold=res_thresh,
+    )
+    print("Chosen Indices", chosen)
+    print("Basis Size", basis.shape[1])
+
+    errors = []
+    all_ps = []
+    for i in range(100):
+        H_full = np.zeros_like(model.H_terms[0], dtype=complex)
+
+        if model_type == "TFIM":
+            J = 2 * np.random.randn()
+            h = 2 * np.random.randn()
+            model_paulis = model_to_paulis(
+                N,
+                model_type,
+                {
+                    "J": J,
+                    "h": h,
+                    "periodic": False,
+                },
             )
-            print()
-            all_ps.append(parameters)
+        elif model_type == "TFXY":
+            Jx = 2 * np.random.randn()
+            Jy = Jx
+            h = 2 * np.random.randn()
+            model_paulis = model_to_paulis(
+                N,
+                model_type,
+                {
+                    "Jx": Jx,
+                    "Jy": Jy,
+                    "h": h,
+                    "periodic": False,
+                },
+            )
+        elif model_type == "heisenberg":
+            Jx = 2 * np.random.randn()
+            Jy = Jx
+            Jz = 2 * np.random.randn()
+            h = 2 * np.random.randn()
+            model_paulis = model_to_paulis(
+                N,
+                model_type,
+                {
+                    "Jx": Jx,
+                    "Jy": Jy,
+                    "Jz": Jz,
+                    "h": h,
+                    "periodic": False,
+                },
+            )
+        elif model_type == "fermi_hubbard":
+            model_paulis = model_to_paulis(
+                N,
+                model_type,
+                {
+                    "t": 2 * np.random.randn(),
+                    "mu": 2 * np.random.randn(),
+                    "U": U,
+                },
+            )
+        elif model_type == "AIM":
+            vb_test = np.array(
+                [0.01] * ((NB) % 2) + [2 * np.random.randn()] * (NB - (NB) % 2)
+            )
+            eb_r = 2.0 * np.random.randn()
+            eb_test = np.array(
+                [0.0] * ((NB) % 2)
+                + [eb_r] * ((NB - (NB) % 2) // 2)
+                + [-eb_r] * ((NB - (NB) % 2) // 2)
+            )
+            print("vb_test", vb_test)
+            print("eb_test", eb_test)
+            model_paulis = model_to_paulis(
+                N,
+                model_type,
+                {
+                    "NI": NI,
+                    "NB": NB,
+                    "U": U,
+                    "ei": [0.0] * NI,
+                    "vb": vb_test,
+                    "eb": eb_test,
+                    "mu": U / 2,
+                    "periodic": False,
+                },
+            )
 
-        plt.plot(errors, "o-")
-        plt.xlabel("Test Case")
-        plt.ylabel("Relative Error for U={:.2f}".format(U))
-        plt.title("Surrogate Model Relative Errors")
-        plt.yscale("log")
-        plt.ylim(1e-20, 1)
-        # plt.xticks(
-        #     range(len(errors)),
-        #     [f"({p[0]:.2f}, {p[n2b_terms + 1]:.2f})" for p in all_ps],
-        #     rotation=90,
-        # )
-        plt.show()
+        if model_type == "AIM" or model_type == "fermi_hubbard":
+            id_loc = np.where(np.array([t[0] for t in model_paulis]) == "")[0][0]
+            grid_point1 = [model_paulis[id_loc][1]]
+            parameters = grid_point1 + [
+                model_paulis[k][1] for k in range(len(model_paulis)) if k != id_loc
+            ]
+        else:
+            parameters = [t[1] for t in model_paulis]
 
+        for i, h in enumerate(model.H_terms):
+            H_full += parameters[i] * h
 
-###############################################################
+        evals, evecs = np.linalg.eigh(H_full)
+
+        # print(parameters)
+        print("Real", evals[0])
+        print("Approx", model.solve(parameters))
+        if abs(evals[0]) < 1e-12:
+            errors.append(np.abs(evals[0] - model.solve(parameters)))
+        else:
+            errors.append(np.abs(evals[0] - model.solve(parameters)) / np.abs(evals[0]))
+        print(
+            "Relative Error",
+            errors[-1],
+        )
+        print()
+        all_ps.append(parameters)
+    print("Basis Size:", basis.shape[1])
+    print("Full Hilbert Size:", model.H_terms[0].shape[0])
+    plt.plot(errors, "o-")
+    plt.xlabel("Test Case")
+    plt.ylabel("Relative Error")
+    plt.title("Surrogate Model Relative Errors")
+    plt.yscale("log")
+    plt.ylim(1e-20, 1)
+    # plt.xticks(
+    #     range(len(errors)),
+    #     [f"({p[0]:.2f}, {p[n2b_terms + 1]:.2f})" for p in all_ps],
+    #     rotation=90,
+    # )
+    plt.show()
