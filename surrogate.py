@@ -1,13 +1,3 @@
-# Bring up to Norman
-# Particle Selection?
-#  - get_ps_basis
-#  - get_occupied_indices
-#  - H[:,basis][basis[
-# any good hamiltonians to test with?
-##### allow "fixing" some parameters?
-# multithreading (possibly with Python 3.14?)
-# JIT (possibly with Python 3.14?)
-
 import numpy as np
 import scipy as sp
 from pauli import *
@@ -104,7 +94,7 @@ class SurrogateModel:
         self,
         residue_threshold: float = 1e-6,
         init_vec: np.ndarray = None,
-        solution_grid: np.ndarray = None,
+        solution_grid: np.ndarray = (None, None),
         svd_tolerance: float = 1e-8,
         degeneracy_truncation: int = 5,
     ):
@@ -115,6 +105,11 @@ class SurrogateModel:
             or type(self.training_grid2) == type(None)
         ):
             self.build_terms()
+
+        H_fulls = {}
+        H2_fulls = {}
+        full_evals_list = {}
+        full_evecs_list = {}
 
         # list of indices into the training grid
         chosen = []
@@ -138,6 +133,7 @@ class SurrogateModel:
             for y in range(solution_grid[0].shape[0]):
                 for x in range(solution_grid[0].shape[1]):
                     H_full = self._build_H_full(y * solution_grid[0].shape[1] + x)
+                    H_fulls[y * solution_grid[0].shape[1] + x] = H_full
                     Hr = basis.conj().T @ H_full @ basis
                     overlap = basis.conj().T @ basis
                     evals, evecs = sp.linalg.eigh(Hr, overlap)
@@ -165,6 +161,7 @@ class SurrogateModel:
             plt.xticks(
                 range(0, solution_grid[0].shape[1], 2),
                 labels=np.round(solution_grid[1], 2)[::2],
+                rotation=45,
             )
             plt.yticks(
                 range(0, solution_grid[0].shape[0], 2),
@@ -172,6 +169,9 @@ class SurrogateModel:
                 rotation=45,
             )
             plt.show()
+        else:
+            for k in range(len(self.training_grid)):
+                H_fulls[k] = self._build_H_full(k)
 
         # iteration
         num_iterations = len(not_chosen)
@@ -195,41 +195,49 @@ class SurrogateModel:
                 # the training grid size and full Hilbert space size, these are
                 # constructed on demand
 
-                H_full = self._build_H_full(j)
-                H2_full = H_full @ H_full  # self._build_H2_full(j)
-                full_evals, full_evecs = np.linalg.eigh(H_full)
-                print()
-                print("Full gs energy:", full_evals[0])
-                print("Full gs energy squared:", full_evals[0] ** 2)
-                print(
-                    "Full gs on H2_full:",
-                    (full_evecs[:, 0].conj().T @ H2_full @ full_evecs[:, 0]).real,
-                )
-                print("Full eigenvalues (first 5):", full_evals[:5])
+                if i == 0:
+                    H_full = H_fulls[j]
+                    # H_full = self._build_H_full(j)
+                    # H_fulls[j] = H_full
+                    H2_full = H_full @ H_full  # self._build_H2_full(j)
+                    H2_fulls[j] = H2_full
+                    full_evals, full_evecs = np.linalg.eigh(H_full)
+                    full_evals_list[j] = full_evals
+                    full_evecs_list[j] = full_evecs
+                    # print()
+                    # print("Full gs energy:", full_evals[0])
+                    # print("Full gs energy squared:", full_evals[0] ** 2)
+                    # print(
+                    #     "Full gs on H2_full:",
+                    #     (full_evecs[:, 0].conj().T @ H2_full @ full_evecs[:, 0]).real,
+                    # )
+                    # print("Full eigenvalues (first 5):", full_evals[:5])
 
-                Hr = basis.conj().T @ H_full @ basis
-                H2r = basis.conj().T @ H2_full @ basis
-                evals, evecs = sp.linalg.eigh(Hr, overlap)
-                print("Reduced gs energy:", evals[0])
-                print("Reduced gs energy squared:", evals[0] ** 2)
-                print(
-                    "Reduced gs on H2r:",
-                    (evecs[:, 0].conj().T @ H2r @ evecs[:, 0]).real,
-                )
+                    Hr = basis.conj().T @ H_full @ basis
+                    H2r = basis.conj().T @ H2_full @ basis
+                    evals, evecs = sp.linalg.eigh(Hr, overlap)
+                    # print("Reduced gs energy:", evals[0])
+                    # print("Reduced gs energy squared:", evals[0] ** 2)
+                    # print(
+                    #     "Reduced gs on H2r:",
+                    #     (evecs[:, 0].conj().T @ H2r @ evecs[:, 0]).real,
+                    # )
+                else:
+                    # print("Full gs energy:", full_evals_list[j][0])
+                    # print("Full gs energy squared:", full_evals_list[j][0] ** 2)
+                    # print(
+                    #     "Full gs on H2_full:",
+                    #     (
+                    #         full_evecs_list[j][:, 0].conj().T
+                    #         @ H2_fulls[j]
+                    #         @ full_evecs_list[j][:, 0]
+                    #     ).real,
+                    # )
+                    # print("Full eigenvalues (first 5):", full_evals_list[j][:5])
 
-                # plt.imshow(evecs.real, label="Reduced Basis", aspect="auto")
-                # plt.colorbar()
-                # plt.title(f"It {i + 1}, Parameter Index {j} Eigenvectors")
-                # plt.show()
-
-                # plt.imshow(
-                #     full_evecs[:, :5].real,
-                #     label="Full Basis (first 5 vecs)",
-                #     aspect="auto",
-                # )
-                # plt.colorbar()
-                # plt.title(f"It {i + 1}, Parameter Index {j} Full Eigenvectors")
-                # plt.show()
+                    Hr = basis.conj().T @ H_fulls[j] @ basis
+                    H2r = basis.conj().T @ H2_fulls[j] @ basis
+                    evals, evecs = sp.linalg.eigh(Hr, overlap)
 
                 # find degeneracy of the ground state
                 degeneracy = 0
@@ -250,14 +258,11 @@ class SurrogateModel:
                         @ (H2r - ((evals[k] * evals[k]) * overlap))
                         @ evecs[:, k]
                     )
-                print("Total Residue for parameter index", j, ":", res2.real)
+                # print("Total Residue for parameter index", j, ":", res2.real)
                 residues.append(res2.real)
                 if res2 > max_res2:
                     max_res2 = res2
                     next_choice = j
-                    chosen_H_full = H_full
-
-            chosen_H_full = self._build_H_full(next_choice)
             max_res2 = np.max(residues)
             print("First loop complete.")
             print("Max Residue", max_res2)
@@ -282,34 +287,20 @@ class SurrogateModel:
                     count = 0
                     for y in range(0, solution_grid[0].shape[0]):  # type: ignore
                         for x in range(0, solution_grid[0].shape[1]):  # type: ignore
-                            H_full = self._build_H_full(
-                                y * solution_grid[0].shape[1] + x
-                            )
+                            H_full = H_fulls[y * solution_grid[0].shape[1] + x]
                             Hr = basis.conj().T @ H_full @ basis
                             overlap = basis.conj().T @ basis
                             evals, evecs = sp.linalg.eigh(Hr, overlap)
                             answer_grid[y, x] = evals[0]
 
                             if y * solution_grid[0].shape[1] + x in not_chosen:
-                                # print(
-                                #     "Estimation:",
-                                #     answer_grid[y, x],
-                                #     "Actual:",
-                                #     solution_grid[0][y, x],
-                                #     "Residue:",
-                                #     residues[count],
-                                # )
                                 count += 1
 
                     plt.imshow(
                         np.abs((answer_grid - solution_grid[0]).real) + 1e-14,
                         norm=mcolors.LogNorm(vmin=1e-14, vmax=1),
                     )
-                    plt.colorbar(
-                        norm=mcolors.LogNorm(
-                            vmin=1e-14, vmax=1
-                        )  # , ticks=[1e-14, 1e-10, 1e0]
-                    )
+                    plt.colorbar(norm=mcolors.LogNorm(vmin=1e-14, vmax=1))
                     plt.scatter(
                         np.array(chosen) % solution_grid[0].shape[1],  # type: ignore
                         np.array(chosen) // solution_grid[0].shape[1],  # type: ignore
@@ -324,6 +315,7 @@ class SurrogateModel:
                     plt.xticks(
                         range(0, solution_grid[0].shape[1], 2),
                         labels=np.round(solution_grid[1], 2)[::2],
+                        rotation=45,
                     )
                     plt.yticks(
                         range(0, solution_grid[0].shape[0], 2),
@@ -346,7 +338,9 @@ class SurrogateModel:
             # plt.legend()
             # plt.show()
 
-            evals, evecs = np.linalg.eigh(chosen_H_full)
+            # evals, evecs = np.linalg.eigh(chosen_H_full)
+            evals = full_evals_list[next_choice]
+            evecs = full_evecs_list[next_choice]
             print("Full system size:", evals.shape[0])
             # print("Full Eigenvalues (degen of Hr + 10):", evals[: degeneracy + 10])
             # find degeneracy of the ground state
@@ -408,8 +402,10 @@ class SurrogateModel:
                     # once, however, due to possible memory limitations based on
                     # the trianing grid size and full Hilbert space size, these are
                     # constructed on demand
-                    H_full = self._build_H_full(j)
-                    H2_full = self._build_H2_full(j)
+                    # H_full = self._build_H_full(j)
+                    # H2_full = self._build_H2_full(j)
+                    H_full = H_fulls[j]
+                    H2_full = H2_fulls[j]
 
                     Hr = basis.conj().T @ H_full @ basis
                     H2r = basis.conj().T @ H2_full @ basis
@@ -433,7 +429,7 @@ class SurrogateModel:
                         next_choice = j
                         chosen_H_full = H_full
 
-                chosen_H_full = self._build_H_full(next_choice)
+                chosen_H_full = H_fulls[next_choice]
                 max_res2 = np.max(residues)
                 print("Max Residue after Compression", max_res2)
 
@@ -456,9 +452,7 @@ class SurrogateModel:
                         count = 0
                         for y in range(0, solution_grid[0].shape[0]):  # type: ignore
                             for x in range(0, solution_grid[0].shape[1]):  # type: ignore
-                                H_full = self._build_H_full(
-                                    y * solution_grid[0].shape[1] + x
-                                )
+                                H_full = H_fulls[y * solution_grid[0].shape[1] + x]
                                 Hr = basis.conj().T @ H_full @ basis
                                 overlap = basis.conj().T @ basis
                                 evals, evecs = sp.linalg.eigh(Hr, overlap)
@@ -497,6 +491,7 @@ class SurrogateModel:
                         plt.xticks(
                             range(0, solution_grid[0].shape[1], 2),
                             labels=np.round(solution_grid[1], 2)[::2],
+                            rotation=45,
                         )
                         plt.yticks(
                             range(0, solution_grid[0].shape[0], 2),
@@ -526,7 +521,7 @@ class SurrogateModel:
                 count = 0
                 for y in range(solution_grid[0].shape[0]):  # type: ignore
                     for x in range(solution_grid[0].shape[1]):  # type: ignore
-                        H_full = self._build_H_full(y * solution_grid[0].shape[1] + x)
+                        H_full = H_fulls[y * solution_grid[0].shape[1] + x]
                         Hr = basis.conj().T @ H_full @ basis
                         overlap = basis.conj().T @ basis
                         evals, evecs = sp.linalg.eigh(Hr, overlap)
@@ -546,11 +541,7 @@ class SurrogateModel:
                     np.abs((answer_grid - solution_grid[0]).real) + 1e-14,
                     norm=mcolors.LogNorm(vmin=1e-14, vmax=1),
                 )
-                plt.colorbar(
-                    norm=mcolors.LogNorm(
-                        vmin=1e-14, vmax=1
-                    )  # , ticks=[1e-14, 1e-10, 1e0]
-                )
+                plt.colorbar(norm=mcolors.LogNorm(vmin=1e-14, vmax=1))
                 plt.scatter(
                     next_choice % solution_grid[0].shape[1],  # type: ignore
                     next_choice // solution_grid[0].shape[1],  # type: ignore
@@ -573,6 +564,7 @@ class SurrogateModel:
                 plt.xticks(
                     range(0, solution_grid[0].shape[1], 2),
                     labels=np.round(solution_grid[1], 2)[::2],
+                    rotation=45,
                 )
                 plt.yticks(
                     range(0, solution_grid[0].shape[0], 2),
@@ -617,14 +609,13 @@ class SurrogateModel:
 if __name__ == "__main__":
 
     ###############################################################
-    res_thresh = 1e-6
-    svd_tol = 1e-5
-    mu = np.linspace(-3.0, 3.0, 10)
-    N = 4
-    ps = None  # Between 0 and (2*N for AIM, fermi_hubbard), N for TFIM/TFXY/Heisenberg
-    ### NOTE: Particle selection *required* for heisenberg
+    res_thresh = 1e-3  # Residue threshold for terminating optimization (lower means more accurate, at the cost of more basis vectors)
+    svd_tol = 1e-8  # For removing linear dependence in basis vectors
+    mu = np.linspace(-3.0, 3.0, 20)  # Parameter grid values for training grid
+    N = 4  # Number of sites (total for TFIM/TFXY/Heisenberg, per spin for fermi_hubbard, AIM)
+    ps = None  # None or Between 0 and N (2*N for AIM, fermi_hubbard), N for TFIM/TFXY/Heisenberg. Can be tuple for (n_up, n_down) for AIM, fermi_hubbard
 
-    model_type = "AIM"  # AIM = Single Impurity Anderson Model, fermi_hubbard, TFIM, TFXY, heisenberg
+    model_type = "TFIM"  # AIM = Single Impurity Anderson Model, fermi_hubbard, TFIM, TFXY, heisenberg
 
     if model_type == "TFIM":
         model_parameters = {
@@ -656,7 +647,7 @@ if __name__ == "__main__":
             "periodic": False,
         }
     elif model_type == "AIM":
-        U = 3.0
+        U = 4.0
         NI = 1
         NB = N - NI
         model_parameters = {
@@ -678,6 +669,7 @@ if __name__ == "__main__":
 
     H_paulis = [t[0] for t in model_paulis]
 
+    ### Any training grid can be used here, this is an example of the model being parameterized over two parameters
     training_grid = []
     for m1 in mu:
         for m2 in mu:
@@ -736,7 +728,7 @@ if __name__ == "__main__":
     model.build_terms()
     print("Number of H terms:", len(model.H_terms))
 
-    # calc real solutions
+    # Calculate the real solutions for testing (only for 2D parameter grids)
     solution_grid = np.zeros((len(mu), len(mu)), dtype=complex)
     for i in range(len(mu)):
         for j in range(len(mu)):
@@ -748,16 +740,20 @@ if __name__ == "__main__":
             solution_grid[i, j] = evals[0]
 
     chosen, basis = model.optimize(
-        solution_grid=(solution_grid, mu),
+        solution_grid=(
+            solution_grid,
+            mu,
+        ),  # Comment this out if no solution grid is desired
         svd_tolerance=svd_tol,
         residue_threshold=res_thresh,
     )
     print("Chosen Indices", chosen)
     print("Basis Size", basis.shape[1])
 
+    ### Testing the surrogate model against random parameters
     errors = []
     all_ps = []
-    for i in range(100):
+    for i in range(200):
         H_full = np.zeros_like(model.H_terms[0], dtype=complex)
 
         if model_type == "TFIM":

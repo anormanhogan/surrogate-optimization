@@ -3,7 +3,6 @@ from math import comb
 from itertools import combinations
 import os
 from openfermion import (
-    FermionOperator,
     jordan_wigner,
     fermi_hubbard,
     get_fermion_operator,
@@ -11,6 +10,7 @@ from openfermion import (
     QubitOperator,
 )
 from openfermion.linalg import get_sparse_operator
+import scipy.sparse as sps
 
 
 class Pauli:
@@ -223,31 +223,37 @@ def gen_from_pauli_string(
     pauli_string: str,
     particle_selection: tuple[int, int] | int = None,
     ordering="uudd",
-) -> np.ndarray:
+    sparse=False,
+) -> np.ndarray | sps.csc_matrix:
     if pauli_string == "":
-        mat = np.eye(2**N)
-        if particle_selection is not None:
-            basis = get_ps_basis(particle_selection, N, ordering=ordering)
-            mat = mat[:, basis][basis]
-        return mat
+        if sparse:
+            mat = sps.eye(2**N, format="csc", dtype=complex)
+            if particle_selection is not None:
+                basis = get_ps_basis(particle_selection, N, ordering=ordering)
+                mat = mat[:, basis][basis]
+            return mat
+        else:
+            mat = np.eye(2**N)
+            if particle_selection is not None:
+                basis = get_ps_basis(particle_selection, N, ordering=ordering)
+                mat = mat[:, basis][basis]
+            return mat
     else:
         op = QubitOperator(pauli_string)
         # print(op)
-        mat = get_sparse_operator(op, N).toarray()
+        if sparse:
+            mat = get_sparse_operator(op, N).tocsc()
+            if particle_selection is not None:
+                basis = get_ps_basis(particle_selection, N, ordering=ordering)
+                mat = mat[:, basis][basis]
+            return mat
+        else:
+            mat = get_sparse_operator(op, N).toarray()
 
-        # import matplotlib.pyplot as plt
-        # plt.imshow(mat.real, cmap="bwr")
-        # plt.colorbar()
-        # plt.title(f"{pauli_string} full matrix")
-        # plt.show()
-        if particle_selection is not None:
-            basis = get_ps_basis(particle_selection, N, ordering=ordering)
-            mat = mat[:, basis][basis]
-            # plt.imshow(mat.real, cmap="bwr")
-            # plt.colorbar()
-            # plt.title(f"{pauli_string} reduced matrix")
-            # plt.show()
-        return mat
+            if particle_selection is not None:
+                basis = get_ps_basis(particle_selection, N, ordering=ordering)
+                mat = mat[:, basis][basis]
+            return mat
 
 
 def of_operator_to_pauli_and_coeff(N, of_operator) -> list[tuple[str, complex]]:
